@@ -14,152 +14,147 @@ import { CreateTransactionResult, CreateTransactionTarget, CreateTransactionUtxo
 const ECPair: ECPairAPI = ECPairFactory(ecc);
 bitcoin.initEccLib(ecc);
 
-import glpk from 'glpk.js';
-
-const coinfyLambda = 0.5;
+import GLPK from 'glpk.js';
+const glpk = GLPK();
+const coinfyLambda = 0.1;
 
 export type ExtendedCoinSelectUtxo = CoinSelectUtxo & {
   memo?: string;
 };
 
-export const coinSelectCoinfy = (utxos: ExtendedCoinSelectUtxo[], targets: CoinSelectTarget[], feeRate: number) => { 
+export const coinSelectCoinfy = (utxos: ExtendedCoinSelectUtxo[], targets: CoinSelectTarget[], feeRate: number): { 
+  inputs: CoinSelectReturnInput[]; 
+  outputs: CoinSelectOutput[]; 
+  fee: number; 
+} => {
+  // Constantes de tamanho (em bytes) para transações P2PKH
+  const OVERHEAD = 10;
+  const INPUT_BYTES = 148;
+  const OUTPUT_BYTES = 34;
+
+  // Número de pagamentos e total a ser enviado
+  const m = targets.length;
+  const P_tot = targets.reduce((sum, t) => sum + (t.value ?? 0), 0);
+
+  // Garantir que o valor mínimo é válido
+  const minTarget = Math.min(...targets.map(t => t.value).filter((v): v is number => v !== undefined));
+
+  const c_max = coinfyLambda * minTarget;
+
+  // Número de UTXOs disponíveis
+  const n = utxos.length;
+
+  // Usamos Number.MAX_SAFE_INTEGER no lugar de Infinity
+  const BIG_UB = Number.MAX_SAFE_INTEGER;
+
+  // Construindo o modelo para o glpk.js
+  const model = {
+    name: 'coinSelectCoinfy',
+    objective: {
+      direction: glpk.GLP_MIN,
+      name: 'obj',
+      vars: [] as { name: string; coef: number }[],
+    },
+    subjectTo: [] as {
+      name: string;
+      vars: { name: string; coef: number }[];
+      bnds: { type: number; lb: number; ub: number };
+    }[],
+    bounds: [] as { name: string; type: number; lb: number; ub: number }[],
+    binaries: [] as string[],
+    generals: [] as string[],
+  };
+
+  // Objetivo: minimizar INPUT_BYTES * (soma de x_j) + OUTPUT_BYTES * k
+  for (let j = 0; j < n; j++) {
+    model.objective.vars.push({ name: `x_${j}`, coef: INPUT_BYTES });
+    model.binaries.push(`x_${j}`);
+    model.bounds.push({ name: `x_${j}`, type: glpk.GLP_DB, lb: 0, ub: 1 });
+  }
+  model.objective.vars.push({ name: 'k', coef: OUTPUT_BYTES });
+  model.generals.push('k');
+  model.bounds.push({ name: 'k', type: glpk.GLP_LO, lb: 0, ub: BIG_UB });
+
+  // Constraint 1: Validade da transação
+  // sum_j [u_j - feeRate * INPUT_BYTES] * x_j - feeRate * OUTPUT_BYTES * k >= P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m)
+  const validityConstraint = {
+    name: 'validity',
+    vars: [] as { name: string; coef: number }[],
+    bnds: { type: glpk.GLP_LO, lb: P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m), ub: BIG_UB },
+  };
+  for (let j = 0; j < n; j++) {
+    validityConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
+  }
+  validityConstraint.vars.push({ name: 'k', coef: -feeRate * OUTPUT_BYTES });
+  model.subjectTo.push(validityConstraint);
+
+  // Constraint 2: Fragmentação do troco
+  // sum_j [u_j - feeRate * INPUT_BYTES] * x_j - P_tot - feeRate*(OVERHEAD+OUTPUT_BYTES*m) <= k * (c_max + feeRate*OUTPUT_BYTES)
+  const changeConstraint = {
+    name: 'changeFragmentation',
+    vars: [] as { name: string; coef: number }[],
+    bnds: { type: glpk.GLP_UP, lb: 0, ub: BIG_UB },
+  };
+  for (let j = 0; j < n; j++) {
+    changeConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
+  }
+  changeConstraint.vars.push({
+    name: 'k',
+    coef: -(feeRate * OUTPUT_BYTES + c_max),
+  });
+  model.subjectTo.push(changeConstraint);
+
+  // Resolver o modelo com glpk.js
+  const options = {
+    msgLevel: glpk.GLP_MSG_OFF,
+    tm_lim: 1000,
+  };
   
 
- // Constantes de tamanho (em bytes) para transações P2PKH
- const OVERHEAD = 10;
- const INPUT_BYTES = 148;
- const OUTPUT_BYTES = 34;
+  const result = glpk.solve(model, options as any);
 
- // Número de pagamentos e total a ser enviado
- const m = targets.length;
- const P_tot = targets.reduce((sum, t) => sum + t.value, 0);
+  const solution = result.result;
 
- // Exemplo de definição de c_max: 50% do menor pagamento (pode ser ajustado conforme o caso)
- const minTarget = Math.min(...targets.map(t => t.value));
- const c_max = coinfyLambda * minTarget;
+  // Seleciona os UTXOs escolhidos
+  const selectedInputs: ExtendedCoinSelectUtxo[] = [];
+  for (let j = 0; j < n; j++) {
+    if (solution.vars[`x_${j}`] >= 0.5) {
+      selectedInputs.push(utxos[j]);
+    }
+  }
+  const numInputs = selectedInputs.length;
+  const k_val = solution.vars['k'] ?? 0;
 
- // Número de UTXOs disponíveis
- const n = utxos.length;
+  // Calcula a taxa final:
+  // fee = feeRate * (OVERHEAD + INPUT_BYTES*(#inputs) + OUTPUT_BYTES*(m + k))
+  const fee = feeRate * (OVERHEAD + INPUT_BYTES * numInputs + OUTPUT_BYTES * (m + k_val));
 
- // Construindo o modelo para o glpk.js
- // As variáveis serão: x_0, x_1, ..., x_{n-1} (binárias) e a variável 'k' (inteira, >= 0)
- const model = {
-   name: 'coinSelectCoinfy',
-   objective: {
-     direction: glpk.GLP_MIN,
-     name: 'obj',
-     vars: [] as { name: string; coef: number }[],
-   },
-   subjectTo: [] as {
-     name: string;
-     vars: { name: string; coef: number }[];
-     bnds: { type: number; lb: number; ub?: number };
-   }[],
-   bounds: [] as { name: string; type: number; lb: number; ub?: number }[],
-   binaries: [] as string[],
-   generals: [] as string[],
- };
+  // Valor total dos inputs selecionados
+  const totalInputValue = selectedInputs.reduce((acc, utxo) => acc + utxo.value, 0);
+  // Troco total
+  const changeTotal = totalInputValue - P_tot - fee;
 
- // Objetivo: minimizar 148 * (soma de x_j) + 34 * k
- for (let j = 0; j < n; j++) {
-   model.objective.vars.push({ name: `x_${j}`, coef: INPUT_BYTES });
-   model.binaries.push(`x_${j}`);
-   // Cada x_j é binária: 0 ou 1
-   model.bounds.push({ name: `x_${j}`, type: glpk.GLP_DB, lb: 0, ub: 1 });
- }
- model.objective.vars.push({ name: 'k', coef: OUTPUT_BYTES });
- // k é uma variável inteira não negativa
- model.generals.push('k');
- model.bounds.push({ name: 'k', type: glpk.GLP_LO, lb: 0 });
+  // Fragmenta o troco em k partes iguais (se houver troco e k > 0)
+  const changeOutputs: { value: number }[] = [];
+  if (k_val > 0 && changeTotal > 0) {
+    const changePerOutput = changeTotal / k_val;
+    for (let i = 0; i < k_val; i++) {
+      changeOutputs.push({ value: changePerOutput });
+    }
+  }
 
- // ----------------------
- // Constraint 1: Validade da transação
- // Garantir que:
- //    sum_{j} (u_j - feeRate*INPUT_BYTES)*x_j - feeRate*OUTPUT_BYTES*k >= P_tot + feeRate*(OVERHEAD + OUTPUT_BYTES*m)
- // Note que feeRate*(OVERHEAD + OUTPUT_BYTES*m) é constante.
- const validityConstraint = {
-   name: 'validity',
-   vars: [] as { name: string; coef: number }[],
-   bnds: { type: glpk.GLP_LO, lb: P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m), ub: 0 },
- };
- for (let j = 0; j < n; j++) {
-   // coeficiente para x_j: u_j - feeRate*INPUT_BYTES
-   validityConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
- }
- // coeficiente para k: - feeRate*OUTPUT_BYTES
- validityConstraint.vars.push({ name: 'k', coef: -feeRate * OUTPUT_BYTES });
- model.subjectTo.push(validityConstraint);
+  // Monta os outputs: converte os targets para CoinSelectOutput e junta os change outputs
+  const outputs: { address?: string; value: number }[] = [];
+  for (const t of targets) {
+    outputs.push({ address: t.address, value: t.value! });
+  }
+  outputs.push(...changeOutputs);
 
- // ----------------------
- // Constraint 2: Fragmentação do troco
- // Queremos que o troco total, definido por:
- //    T - feeRate*(OVERHEAD + INPUT_BYTES*(sum x_j) + OUTPUT_BYTES*(m+k)) - P_tot
- // seja menor ou igual a k*c_max.
- // Ou seja:
- //    sum_{j} (u_j - feeRate*INPUT_BYTES)*x_j - (feeRate*OUTPUT_BYTES + c_max)*k <= P_tot + feeRate*(OVERHEAD + OUTPUT_BYTES*m)
- const changeConstraint = {
-   name: 'changeFragmentation',
-   vars: [] as { name: string; coef: number }[],
-   bnds: { type: glpk.GLP_UP, lb: 0, ub: P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m) },
- };
- for (let j = 0; j < n; j++) {
-   changeConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
- }
- changeConstraint.vars.push({
-   name: 'k',
-   coef: -(feeRate * OUTPUT_BYTES + c_max),
- });
- model.subjectTo.push(changeConstraint);
-
- // ----------------------
- // Agora, resolvemos o modelo com glpk.js
- // Configuração opcional: desativar mensagens e limitar o tempo (em milissegundos)
- const options = {
-   msgLevel: glpk.GLP_MSG_OFF,
-   tmLimit: 1000,
- };
-
- const result = glpk.solve(model, options);
- const solution = result.result; // Objeto com as variáveis, por exemplo: { x_0: 1, x_1: 0, ..., k: 2 }
-
- // Seleciona os UTXOs escolhidos (para os quais x_j >= 0.5, visto que são binárias)
- const selectedInputs: ExtendedCoinSelectUtxo[] = [];
- for (let j = 0; j < n; j++) {
-   if (solution[`x_${j}`] >= 0.5) {
-     selectedInputs.push(utxos[j]);
-   }
- }
-
- const numInputs = selectedInputs.length;
- const k_val = solution['k'];
-
- // Calcula a taxa final com base no número de inputs e no k obtido
- const fee = feeRate * (OVERHEAD + INPUT_BYTES * numInputs + OUTPUT_BYTES * (m + k_val));
-
- // Valor total dos inputs selecionados
- const totalInputValue = selectedInputs.reduce((acc, utxo) => acc + utxo.value, 0);
- // Troco total
- const changeTotal = totalInputValue - P_tot - fee;
-
- // Fragmenta o troco em k partes iguais (se k > 0 e houver troco)
- const changeOutputs: { value: number; memo: string }[] = [];
- if (k_val > 0 && changeTotal > 0) {
-   const changePerOutput = changeTotal / k_val;
-   for (let i = 0; i < k_val; i++) {
-     changeOutputs.push({ value: changePerOutput, memo: 'fragmented change' });
-   }
- }
-
- // Monta os outputs: os targets originais + os outputs de troco
- const outputs = [...targets, ...changeOutputs];
-
- return {
-   inputs: selectedInputs,
-   outputs,
-   fee,
- };
-
-
+  return {
+    inputs: selectedInputs,
+    outputs,
+    fee,
+  };
 };
 
 /**
@@ -773,3 +768,4 @@ export class LegacyWallet extends AbstractWallet {
     return txs.length > 0;
   }
 }
+

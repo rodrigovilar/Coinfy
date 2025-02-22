@@ -5,7 +5,7 @@ This project is a fork of BlueWallet, a popular Bitcoin wallet for iOS and Andro
 The code of the main project features are packaged on these two PRs:
 
 - [Change on Send Transaction screen to warn about UTXOs mixing](https://github.com/BlueWallet/BlueWallet/pull/7619)
-- [WIP - Change on Coin selection algorithm to use selection with leverage](https://github.com/BlueWallet/BlueWallet/pull/1)
+- [WIP - Change on Coin selection algorithm to use selection with leverage](https://github.com/rodrigovilar/Coinfy/pull/1)
 
 ## BUILD & RUN IT
 

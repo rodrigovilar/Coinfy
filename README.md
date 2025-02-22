@@ -63,8 +63,8 @@ node --version && npm --version
 * In your console:
 
 ```
-git clone https://github.com/BlueWallet/BlueWallet.git
-cd BlueWallet
+git clone https://github.com/rodrigovilar/Coinfy.git
+cd Coinfy
 git pull
 git checkout initial-interface
 npm install
@@ -99,11 +99,11 @@ npx pod-install
 npm start
 ```
 
-In another terminal window within the BlueWallet folder:
+In another terminal window within the Coinfy folder:
 ```
 npx react-native run-ios
 ```
-**To debug BlueWallet on the iOS Simulator, you must choose a Rosetta-compatible iOS Simulator. This can be done by navigating to the Product menu in Xcode, selecting Destination Architectures, and then opting for "Show Both." This action will reveal the simulators that support Rosetta.
+**To debug Coinfy on the iOS Simulator, you must choose a Rosetta-compatible iOS Simulator. This can be done by navigating to the Product menu in Xcode, selecting Destination Architectures, and then opting for "Show Both." This action will reveal the simulators that support Rosetta.
 **
 
 * To run on macOS using Mac Catalyst:

@@ -1,7 +1,7 @@
 import BigNumber from 'bignumber.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import bitcoinMessage from 'bitcoinjs-message';
-import coinSelect, { CoinSelectOutput, CoinSelectReturnInput, CoinSelectTarget } from 'coinselect';
+import coinSelect, { CoinSelectOutput, CoinSelectReturnInput, CoinSelectTarget, CoinSelectUtxo } from 'coinselect';
 import coinSelectSplit from 'coinselect/split';
 import { ECPairAPI, ECPairFactory, Signer } from 'ecpair';
 
@@ -13,6 +13,149 @@ import { AbstractWallet } from './abstract-wallet';
 import { CreateTransactionResult, CreateTransactionTarget, CreateTransactionUtxo, Transaction, Utxo } from './types';
 const ECPair: ECPairAPI = ECPairFactory(ecc);
 bitcoin.initEccLib(ecc);
+
+import GLPK from 'glpk.js';
+const glpk = GLPK();
+const coinfyLambda = 0.1;
+
+export type ExtendedCoinSelectUtxo = CoinSelectUtxo & {
+  memo?: string;
+};
+
+export const coinSelectCoinfy = (utxos: ExtendedCoinSelectUtxo[], targets: CoinSelectTarget[], feeRate: number): { 
+  inputs: CoinSelectReturnInput[]; 
+  outputs: CoinSelectOutput[]; 
+  fee: number; 
+} => {
+  // Constantes de tamanho (em bytes) para transações P2PKH
+  const OVERHEAD = 10;
+  const INPUT_BYTES = 148;
+  const OUTPUT_BYTES = 34;
+
+  // Número de pagamentos e total a ser enviado
+  const m = targets.length;
+  const P_tot = targets.reduce((sum, t) => sum + (t.value ?? 0), 0);
+
+  // Garantir que o valor mínimo é válido
+  const minTarget = Math.min(...targets.map(t => t.value).filter((v): v is number => v !== undefined));
+
+  const c_max = coinfyLambda * minTarget;
+
+  // Número de UTXOs disponíveis
+  const n = utxos.length;
+
+  // Usamos Number.MAX_SAFE_INTEGER no lugar de Infinity
+  const BIG_UB = Number.MAX_SAFE_INTEGER;
+
+  // Construindo o modelo para o glpk.js
+  const model = {
+    name: 'coinSelectCoinfy',
+    objective: {
+      direction: glpk.GLP_MIN,
+      name: 'obj',
+      vars: [] as { name: string; coef: number }[],
+    },
+    subjectTo: [] as {
+      name: string;
+      vars: { name: string; coef: number }[];
+      bnds: { type: number; lb: number; ub: number };
+    }[],
+    bounds: [] as { name: string; type: number; lb: number; ub: number }[],
+    binaries: [] as string[],
+    generals: [] as string[],
+  };
+
+  // Objetivo: minimizar INPUT_BYTES * (soma de x_j) + OUTPUT_BYTES * k
+  for (let j = 0; j < n; j++) {
+    model.objective.vars.push({ name: `x_${j}`, coef: INPUT_BYTES });
+    model.binaries.push(`x_${j}`);
+    model.bounds.push({ name: `x_${j}`, type: glpk.GLP_DB, lb: 0, ub: 1 });
+  }
+  model.objective.vars.push({ name: 'k', coef: OUTPUT_BYTES });
+  model.generals.push('k');
+  model.bounds.push({ name: 'k', type: glpk.GLP_LO, lb: 0, ub: BIG_UB });
+
+  // Constraint 1: Validade da transação
+  // sum_j [u_j - feeRate * INPUT_BYTES] * x_j - feeRate * OUTPUT_BYTES * k >= P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m)
+  const validityConstraint = {
+    name: 'validity',
+    vars: [] as { name: string; coef: number }[],
+    bnds: { type: glpk.GLP_LO, lb: P_tot + feeRate * (OVERHEAD + OUTPUT_BYTES * m), ub: BIG_UB },
+  };
+  for (let j = 0; j < n; j++) {
+    validityConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
+  }
+  validityConstraint.vars.push({ name: 'k', coef: -feeRate * OUTPUT_BYTES });
+  model.subjectTo.push(validityConstraint);
+
+  // Constraint 2: Fragmentação do troco
+  // sum_j [u_j - feeRate * INPUT_BYTES] * x_j - P_tot - feeRate*(OVERHEAD+OUTPUT_BYTES*m) <= k * (c_max + feeRate*OUTPUT_BYTES)
+  const changeConstraint = {
+    name: 'changeFragmentation',
+    vars: [] as { name: string; coef: number }[],
+    bnds: { type: glpk.GLP_UP, lb: 0, ub: BIG_UB },
+  };
+  for (let j = 0; j < n; j++) {
+    changeConstraint.vars.push({ name: `x_${j}`, coef: utxos[j].value - feeRate * INPUT_BYTES });
+  }
+  changeConstraint.vars.push({
+    name: 'k',
+    coef: -(feeRate * OUTPUT_BYTES + c_max),
+  });
+  model.subjectTo.push(changeConstraint);
+
+  // Resolver o modelo com glpk.js
+  const options = {
+    msgLevel: glpk.GLP_MSG_OFF,
+    tm_lim: 1000,
+  };
+  
+
+  const result = glpk.solve(model, options as any);
+
+  const solution = result.result;
+
+  // Seleciona os UTXOs escolhidos
+  const selectedInputs: ExtendedCoinSelectUtxo[] = [];
+  for (let j = 0; j < n; j++) {
+    if (solution.vars[`x_${j}`] >= 0.5) {
+      selectedInputs.push(utxos[j]);
+    }
+  }
+  const numInputs = selectedInputs.length;
+  const k_val = solution.vars['k'] ?? 0;
+
+  // Calcula a taxa final:
+  // fee = feeRate * (OVERHEAD + INPUT_BYTES*(#inputs) + OUTPUT_BYTES*(m + k))
+  const fee = feeRate * (OVERHEAD + INPUT_BYTES * numInputs + OUTPUT_BYTES * (m + k_val));
+
+  // Valor total dos inputs selecionados
+  const totalInputValue = selectedInputs.reduce((acc, utxo) => acc + utxo.value, 0);
+  // Troco total
+  const changeTotal = totalInputValue - P_tot - fee;
+
+  // Fragmenta o troco em k partes iguais (se houver troco e k > 0)
+  const changeOutputs: { value: number }[] = [];
+  if (k_val > 0 && changeTotal > 0) {
+    const changePerOutput = changeTotal / k_val;
+    for (let i = 0; i < k_val; i++) {
+      changeOutputs.push({ value: changePerOutput });
+    }
+  }
+
+  // Monta os outputs: converte os targets para CoinSelectOutput e junta os change outputs
+  const outputs: { address?: string; value: number }[] = [];
+  for (const t of targets) {
+    outputs.push({ address: t.address, value: t.value! });
+  }
+  outputs.push(...changeOutputs);
+
+  return {
+    inputs: selectedInputs,
+    outputs,
+    fee,
+  };
+};
 
 /**
  *  Has private key and single address like "1ABCD....."
@@ -347,6 +490,8 @@ export class LegacyWallet extends AbstractWallet {
     return hd.getTransactions.apply(this);
   }
 
+
+
   /**
    * Broadcast txhex. Can throw an exception if failed
    *
@@ -370,6 +515,11 @@ export class LegacyWallet extends AbstractWallet {
     fee: number;
   } {
     let algo = coinSelect;
+
+    if (coinfyLambda > 0) {
+      algo = coinSelectCoinfy;
+    }
+
     // if targets has output without a value, we want send MAX to it
     if (targets.some(i => !('value' in i))) {
       algo = coinSelectSplit;
@@ -618,3 +768,4 @@ export class LegacyWallet extends AbstractWallet {
     return txs.length > 0;
   }
 }
+

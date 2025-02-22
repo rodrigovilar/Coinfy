@@ -1,29 +1,11 @@
-# BlueWallet - A Bitcoin & Lightning Wallet
+# CoinfyWallet - A Bitcoin & Lightning Wallet
 
-[![GitHub tag](https://img.shields.io/badge/dynamic/json.svg?url=https://raw.githubusercontent.com/BlueWallet/BlueWallet/master/package.json&query=$.version&label=Version)](https://github.com/BlueWallet/BlueWallet)
-[![CircleCI](https://circleci.com/gh/BlueWallet/BlueWallet.svg?style=svg)](https://circleci.com/gh/BlueWallet/BlueWallet)
-[![code style: prettier](https://img.shields.io/badge/code_style-prettier-ff69b4.svg?style=flat-square)](https://github.com/prettier/prettier)
-![](https://img.shields.io/github/license/BlueWallet/BlueWallet.svg)
+This project is a fork of BlueWallet, a popular Bitcoin wallet for iOS and Android. This project was submitted as a result of a hackathon on [Bitcoin++ 2025 - Florianopolis, Brazil](https://btcplusplus.dev/conf/floripa).
 
-Thin Bitcoin Wallet.
-Built with React Native and Electrum.
+The code of the main project features are packaged on these two PRs:
 
-[![Appstore](https://bluewallet.io/uploads/app-store-badge-blue.svg)](https://itunes.apple.com/us/app/bluewallet-bitcoin-wallet/id1376878040?l=ru&ls=1&mt=8)
-[![Playstore](https://bluewallet.io/uploads/play-store-badge-blue.svg)](https://play.google.com/store/apps/details?id=io.bluewallet.bluewallet)
-
-Website: [bluewallet.io](https://bluewallet.io)
-
-Community: [telegram group](https://t.me/bluewallet)
-
-* Private keys never leave your device
-* Lightning Network supported
-* SegWit-first. Replace-By-Fee support
-* Encryption. Plausible deniability
-* And many more [features...](https://bluewallet.io/features)
-
-
-<img src="https://i.imgur.com/hHYJnMj.png" width="100%">
-
+- [Change on Send Transaction screen to warn about UTXOs mixing](https://github.com/BlueWallet/BlueWallet/pull/7619)
+- [WIP - Change on Coin selection algorithm to use selection with leverage](https://github.com/BlueWallet/BlueWallet/pull/1)
 
 ## BUILD & RUN IT
 
@@ -40,6 +22,8 @@ node --version && npm --version
 ```
 git clone https://github.com/BlueWallet/BlueWallet.git
 cd BlueWallet
+git pull
+git checkout initial-interface
 npm install
 ```
 
@@ -51,7 +35,7 @@ You will now need to either connect an Android device to your computer or run an
 
 1. Download and run Android Studio
 2. Click on "Open an existing Android Studio Project"
-3. Open `build.gradle` file under `BlueWallet/android/` folder
+3. Open `build.gradle` file under `Coinfy/android/` folder
 4. Android Studio will take some time to set things up. Once everything is set up, go to `Tools` -> `AVD Manager`.
     * 📝 This option [may take some time to appear in the menu](https://stackoverflow.com/questions/47173708/why-avd-manager-options-are-not-showing-in-android-studio) if you're opening the project in a freshly-installed version of Android Studio.
 5. Click on "Create Virtual Device..." and go through the steps to create a virtual device
@@ -94,41 +78,6 @@ Open ios/BlueWallet.xcworkspace. Once the project loads, select the scheme/targe
 npm run test
 ```
 
-
 ## LICENSE
 
 MIT
-
-## WANT TO CONTRIBUTE?
-
-Grab an issue from [the backlog](https://github.com/BlueWallet/BlueWallet/issues), try to start or submit a PR, any doubts we will try to guide you. Contributors have a private telegram group, request access by email bluewallet@bluewallet.io
-
-## Translations
-
-We accept translations via [Transifex](https://www.transifex.com/bluewallet/bluewallet/)
-
-To participate you need to:
-1. Sign up to Transifex
-2. Find BlueWallet project
-3. Send join request
-4. After we accept your request you will be able to start translating! That's it!
-
-Please note the values in curly braces should not be translated. These are the names of the variables that will be inserted into the translated string. For example, the original string `"{number} of {total}"` in Russian will be `"{number} из {total}"`.
-
-Transifex automatically creates Pull Request when language reaches 100% translation. We also trigger this by hand before each release, so don't worry if you can't translate everything, every word counts.
-
-## Q&A
-
-Builds automated and tested with BrowserStack
-
-<a href="https://www.browserstack.com/"><img src="https://i.imgur.com/syscHCN.png" width="160px"></a>
-
-Bugs reported via BugSnag
-
-<a href="https://www.bugsnag.com"><img src="https://images.typeform.com/images/QKuaAssrFCq7/image/default" width="160px"></a>
-
-
-## RESPONSIBLE DISCLOSURE
-
-Found critical bugs/vulnerabilities? Please email them bluewallet@bluewallet.io
-Thanks!

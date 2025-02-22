@@ -4,8 +4,51 @@ This project is a fork of BlueWallet, a popular Bitcoin wallet for iOS and Andro
 
 The code of the main project features are packaged on these two PRs:
 
-- [Change on Send Transaction screen to warn about UTXOs mixing](https://github.com/BlueWallet/BlueWallet/pull/7619)
-- [WIP - Change on Coin selection algorithm to use selection with leverage](https://github.com/rodrigovilar/Coinfy/pull/1)
+## Change on Send Transaction screen to warn about UTXOs mixing
+
+[PR](https://github.com/BlueWallet/BlueWallet/pull/7619)
+
+- The main logic changes were implemented on `class/wallets/legacy-wallet.ts`:
+
+There are two algorithms used to select coins: `coinSelectSplit` and `coinSelect`. We added a param `coinfyLambda` that, if present, changes the selection algorithm to `coinSelectCoinfy`.
+
+`coinSelectCoinfy` split the UTXOs based on its memo, which is stored on Wallet app, not on blockchain.
+If memo contains the `dirty` keyword, the UTXO is added on dirty UTXOs set.
+If memo contains the `clean` keyword, the UTXO is added on clean UTXOs set.
+If memo contains the `none` keyword or memo is empty, the UTXO is added on none UTXOs set.
+
+Example of a list of UTXO with memos:
+
+<img width="376" alt="Captura de Tela 2025-02-22 às 08 34 26" src="https://github.com/user-attachments/assets/2e823bd8-50bc-45e2-b4e5-8f00fca58416" />
+
+Then `coinSelectCoinfy` algorithm tries to select only safe UTXOs: `clean` and `none` using the `coinSelect` algorithm. If they contain enough balance, the algorithm creates the new transaction and returns it.
+
+The next step is trying to select only dirty UTXOs using the `coinSelect` algorithm. If they contain enough balance, the algorithm creates the new transaction and returns it.
+
+Example of a scenario without mixed UTXOs:
+
+<img width="376" alt="Captura de Tela 2025-02-22 às 08 41 17" src="https://github.com/user-attachments/assets/022600aa-1c7f-400e-b064-e0df44938101" />
+
+
+Otherwise, it will need to mix safe and dirty UTXOs. If they contain enough balance, the algorithm creates the new transaction and returns it, adding a warn message about UTXO mixing and informing the amount of clean sats necessary to be added on wallet in order to enable not mixing them.
+
+Example of a scenario with mixed UTXOs:
+
+<img width="378" alt="Captura de Tela 2025-02-22 às 08 42 47" src="https://github.com/user-attachments/assets/03d437df-640f-4a98-891f-67b3b0ec8c92" />
+
+- There are many design changes on the files of `components` folder
+- And finally on the `screen/send/SendDetails.tsx` screen, the graphic changes were made on create the UTXO mixing warn and a button that will open the Privacy configuration screen, which will gather the params necessary for [Bitcoin Coin selection with leverage](https://github.com/rodrigovilar/Coinfy/pull/1).
+
+
+## WIP - Change on Coin selection algorithm to use selection with leverage
+
+[PR](https://github.com/rodrigovilar/Coinfy/pull/1)
+
+This WIP task aims to implement the [Bitcoin Coin Selection with Leverage
+](https://ui.adsabs.harvard.edu/abs/2019arXiv191101330D/abstract) algorithm, proposed by Daniel J. Diroff in order to select coins that Privacy concerns for big changes on UTXOs.
+
+The WIP is written on `class/wallets/legacy-wallet.ts`.
+
 
 ## BUILD & RUN IT
 
